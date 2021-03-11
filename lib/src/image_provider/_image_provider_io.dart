@@ -9,6 +9,8 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import '../../cached_network_image.dart' show ImageRenderMethodForWeb;
 import 'cached_network_image_provider.dart' as image_provider;
 
+/// IO implementation of the CachedNetworkImageProvider; the ImageProvider to
+/// load network images using a cache.
 class CachedNetworkImageProvider
     extends ImageProvider<image_provider.CachedNetworkImageProvider>
     implements image_provider.CachedNetworkImageProvider {
@@ -16,10 +18,13 @@ class CachedNetworkImageProvider
   /// When the image fails to load [errorListener] is called.
   const CachedNetworkImageProvider(
     this.url, {
+    this.maxHeight,
+    this.maxWidth,
     this.scale = 1.0,
     this.errorListener,
     this.headers,
     this.cacheManager,
+    this.cacheKey,
     //ignore: avoid_unused_constructor_parameters
     ImageRenderMethodForWeb imageRenderMethodForWeb,
   })  : assert(url != null),
@@ -32,6 +37,10 @@ class CachedNetworkImageProvider
   @override
   final String url;
 
+  /// Cache key of the image to cache
+  @override
+  final String cacheKey;
+
   /// Scale of the image
   @override
   final double scale;
@@ -43,6 +52,12 @@ class CachedNetworkImageProvider
   /// Set headers for the image provider, for example for authentication
   @override
   final Map<String, String> headers;
+
+  @override
+  final int maxHeight;
+
+  @override
+  final int maxWidth;
 
   @override
   Future<CachedNetworkImageProvider> obtainKey(
@@ -76,8 +91,23 @@ class CachedNetworkImageProvider
     assert(key == this);
     try {
       var mngr = cacheManager ?? DefaultCacheManager();
-      await for (var result in mngr.getFileStream(key.url,
-          withProgress: true, headers: headers)) {
+      assert(
+          mngr is ImageCacheManager || (maxWidth == null && maxHeight == null),
+          'To resize the image with a CacheManager the '
+          'CacheManager needs to be an ImageCacheManager. maxWidth and '
+          'maxHeight will be ignored when a normal CacheManager is used.');
+
+      var stream = mngr is ImageCacheManager
+          ? mngr.getImageFile(key.url,
+              maxHeight: maxHeight,
+              maxWidth: maxWidth,
+              withProgress: true,
+              headers: headers,
+              key: key.cacheKey)
+          : mngr.getFileStream(key.url,
+              withProgress: true, headers: headers, key: key.cacheKey);
+
+      await for (var result in stream) {
         if (result is DownloadProgress) {
           chunkEvents.add(ImageChunkEvent(
             cumulativeBytesLoaded: result.downloaded,
@@ -109,13 +139,16 @@ class CachedNetworkImageProvider
   @override
   bool operator ==(dynamic other) {
     if (other is CachedNetworkImageProvider) {
-      return url == other.url && scale == other.scale;
+      return ((cacheKey ?? url) == (other.cacheKey ?? other.url)) &&
+          scale == other.scale &&
+          maxHeight == other.maxHeight &&
+          maxWidth == other.maxWidth;
     }
     return false;
   }
 
   @override
-  int get hashCode => hashValues(url, scale);
+  int get hashCode => hashValues(cacheKey ?? url, scale, maxHeight, maxWidth);
 
   @override
   String toString() => '$runtimeType("$url", scale: $scale)';
